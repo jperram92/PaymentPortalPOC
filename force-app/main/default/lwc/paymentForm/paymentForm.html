@@ -1,0 +1,224 @@
+<!--
+  @description       : eWAY Payment Form with Secure Fields Integration
+  @author            : jamesperram@gmail.com
+  @group             : Payment Integration
+  @last modified on  : 11-28-2025
+  @last modified by  : jamesperram@gmail.com
+-->
+<template>
+    <lightning-card title="Secure Payment" icon-name="standard:payment_gateway">
+        <div class="slds-p-around_medium">
+            <p class="slds-text-body_regular slds-m-bottom_medium">
+                <lightning-icon icon-name="utility:lock" size="x-small" class="slds-m-right_xx-small"></lightning-icon>
+                Click below to securely process a payment
+            </p>
+            
+            <lightning-input 
+                type="number" 
+                label="Amount (Dollars)" 
+                value={amount} 
+                onchange={handleAmountChange}
+                min="0.01"
+                step="0.01"
+                class="slds-m-bottom_small">
+            </lightning-input>
+            
+            <div class="slds-text-body_small slds-text-color_weak slds-m-bottom_medium">
+                <strong>Total Amount:</strong> ${displayAmount} AUD
+            </div>
+            
+            <div class="slds-m-top_medium slds-m-bottom_medium">
+                <lightning-button 
+                    variant="brand" 
+                    label="Open Payment Form" 
+                    onclick={openModal}
+                    icon-name="utility:new_window">
+                </lightning-button>
+            </div>
+            
+            <!-- Success message displayed outside modal -->
+            <template lwc:if={showSuccess}>
+                <div class="slds-notify slds-notify_alert slds-alert_success slds-m-top_medium" role="alert">
+                    <span class="slds-assistive-text">Success</span>
+                    <lightning-icon icon-name="utility:success" alternative-text="Success" size="x-small" variant="inverse" class="slds-m-right_x-small"></lightning-icon>
+                    <h2>{successMessage}</h2>
+                </div>
+            </template>
+                <!-- Debug area (developer-only) -->
+                <template if:true={debugMode}>
+                    <div class="slds-m-bottom_medium slds-text-color_weak">
+                        <label class="slds-text-title_bold">Debug - eWAY Response</label>
+                        <pre style="white-space: pre-wrap; background:#f7f7f9; padding: 8px; border-radius: 4px;">{debugResponse}</pre>
+                    </div>
+                </template>
+        </div>
+        
+        <!-- Footer with PCI Compliance Badge -->
+        <div slot="footer" class="slds-text-align_center slds-p-around_small">
+            <div class="slds-text-body_small slds-text-color_weak">
+                <lightning-icon icon-name="utility:shield" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
+                PCI DSS Compliant | SAQ A Eligible | Powered by eWAY
+            </div>
+        </div>
+    </lightning-card>
+
+    <!-- Payment Modal -->
+    <template lwc:if={isModalOpen}>
+        <section role="dialog" tabindex="-1" aria-labelledby="modal-heading-01" aria-modal="true" class="slds-modal slds-fade-in-open slds-modal_medium">
+            <div class="slds-modal__container">
+                <!-- Modal Header -->
+                <header class="slds-modal__header">
+                    <lightning-button-icon 
+                        icon-name="utility:close" 
+                        alternative-text="Close"
+                        class="slds-modal__close"
+                        onclick={closeModal}>
+                    </lightning-button-icon>
+                    <h2 id="modal-heading-01" class="slds-text-heading_medium slds-hyphenate">
+                        <lightning-icon icon-name="utility:lock" size="small" class="slds-m-right_small"></lightning-icon>
+                        Secure Payment
+                    </h2>
+                </header>
+                
+                <!-- Modal Content -->
+                <div class="slds-modal__content slds-p-around_medium" id="modal-content-id-1">
+                    <!-- Customer Information Section -->
+                    <div class="slds-section slds-is-open slds-m-bottom_medium">
+                        <h3 class="slds-section__title slds-theme_shade slds-p-around_x-small">
+                            <span class="slds-truncate" title="Customer Information">Customer Information</span>
+                        </h3>
+                        <div class="slds-section__content">
+                            <div class="slds-grid slds-gutters slds-m-bottom_small">
+                                <div class="slds-col slds-size_1-of-2">
+                                    <lightning-input 
+                                        type="text" 
+                                        label="First Name" 
+                                        value={firstName}
+                                        onchange={handleFirstNameChange}
+                                        required
+                                        disabled={isProcessing}>
+                                    </lightning-input>
+                                </div>
+                                <div class="slds-col slds-size_1-of-2">
+                                    <lightning-input 
+                                        type="text" 
+                                        label="Last Name" 
+                                        value={lastName}
+                                        onchange={handleLastNameChange}
+                                        required
+                                        disabled={isProcessing}>
+                                    </lightning-input>
+                                </div>
+                            </div>
+                            
+                            <lightning-input 
+                                type="email" 
+                                label="Email" 
+                                value={email}
+                                onchange={handleEmailChange}
+                                required
+                                disabled={isProcessing}
+                                class="slds-m-bottom_small">
+                            </lightning-input>
+                            
+                            <lightning-input 
+                                type="number" 
+                                label="Amount (Dollars)" 
+                                value={amount}
+                                onchange={handleAmountChange}
+                                min="0.01"
+                                step="0.01"
+                                required
+                                disabled={isProcessing}
+                                class="slds-m-bottom_x-small">
+                            </lightning-input>
+                            
+                            <div class="slds-text-body_small slds-text-color_weak">
+                                <strong>Total Amount:</strong> ${displayAmount} AUD
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Secure Card Details Section -->
+                    <div class="slds-section slds-is-open">
+                        <h3 class="slds-section__title slds-theme_shade slds-p-around_x-small">
+                            <span class="slds-truncate" title="Card Details">
+                                <lightning-icon icon-name="utility:lock" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
+                                Secure Card Details
+                            </span>
+                        </h3>
+                        <div class="slds-section__content">
+                            <div class="slds-box slds-m-bottom_small" style="padding: 0; background: #fafaf9; border-radius: 4px;">
+                                <iframe 
+                                    data-id="secureIframe" 
+                                    src="" 
+                                    style="width: 100%; height: 200px; border: none; display: block;"
+                                    onload={handleIframeLoad}
+                                    title="Secure Payment Fields">
+                                </iframe>
+                            </div>
+                            
+                            <div class="slds-text-body_small slds-text-color_weak">
+                                <lightning-icon icon-name="utility:info" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
+                                Your card details are encrypted and processed securely by eWAY. 
+                                We never store or see your full card number.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Status Messages -->
+                    <template lwc:if={showStatus}>
+                        <div class="slds-m-top_medium slds-m-bottom_small">
+                            <div class="slds-text-align_center">
+                                <lightning-spinner alternative-text="Processing" size="small"></lightning-spinner>
+                                <div class="slds-text-color_weak slds-m-top_small">{statusMessage}</div>
+                            </div>
+                        </div>
+                    </template>
+                    
+                    <template lwc:if={showError}>
+                        <div class="slds-m-top_medium">
+                            <div class="slds-notify slds-notify_alert slds-alert_error" role="alert">
+                                <span class="slds-assistive-text">Error</span>
+                                <lightning-icon icon-name="utility:error" alternative-text="Error" size="x-small" variant="inverse" class="slds-m-right_x-small"></lightning-icon>
+                                <h2>{errorMessage}</h2>
+                            </div>
+                        </div>
+                    </template>
+                    
+                    <template lwc:if={showSuccess}>
+                        <div class="slds-m-top_medium">
+                            <div class="slds-notify slds-notify_alert slds-alert_success" role="alert">
+                                <span class="slds-assistive-text">Success</span>
+                                <lightning-icon icon-name="utility:success" alternative-text="Success" size="x-small" variant="inverse" class="slds-m-right_x-small"></lightning-icon>
+                                <h2>{successMessage}</h2>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+                
+                <!-- Modal Footer -->
+                <footer class="slds-modal__footer">
+                    <lightning-button 
+                        variant="neutral" 
+                        label="Cancel" 
+                        onclick={closeModal}
+                        disabled={isProcessing}>
+                    </lightning-button>
+                    <div style="display:flex; align-items:center; gap: 12px;">
+                        <lightning-input type="checkbox" label="Debug" onchange={handleDebugToggle} checked={debugMode} class="slds-m-right_small"></lightning-input>
+                        <lightning-button 
+                        variant="brand" 
+                        label="Pay Now" 
+                        onclick={handlePay}
+                        disabled={isPayDisabled}
+                        icon-name="utility:lock"
+                        class="slds-m-left_x-small">
+                    </lightning-button>
+                    </div>
+                </footer>
+            </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
+</template>

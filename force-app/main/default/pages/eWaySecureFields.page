@@ -1,0 +1,373 @@
+<!--
+  @description       : eWAY Secure Fields Visualforce Wrapper
+  @author            : jamesperram@gmail.com
+  @group             : Payment Integration
+  @last modified on  : 11-28-2025
+  @last modified by  : jamesperram@gmail.com
+  
+  This page hosts eWAY Secure Fields in a standard DOM environment,
+  solving LWC Shadow DOM compatibility issues while maintaining SAQ A compliance.
+  Card data is handled entirely by eWAY's servers - never touches Salesforce.
+-->
+<apex:page showHeader="false" sidebar="false" applyHtmlTag="true" applyBodyTag="true" lightningStylesheets="true" docType="html-5.0">
+    <!-- Load eWAY Secure Fields script with deferred initialization -->
+    <script src="https://secure.ewaypayments.com/scripts/eWAY.min.js" data-init="false"></script>
+
+    <style>
+        /* Reset and base styling */
+        * {
+            box-sizing: border-box;
+        }
+        
+        body { 
+            font-family: 'Salesforce Sans', Arial, sans-serif; 
+            padding: 16px;
+            margin: 0;
+            background-color: #ffffff;
+        }
+        
+        /* Field labels */
+        .field-label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: #3e3e3c;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .field-label .required {
+            color: #c23934;
+            margin-left: 2px;
+        }
+        
+        /* Field containers - SLDS-style input appearance */
+        .field-container { 
+            margin-bottom: 16px;
+        }
+        
+        .field-wrapper {
+            border: 1px solid #dddbda; 
+            padding: 0 12px;
+            border-radius: 4px;
+            background-color: #ffffff;
+            min-height: 32px;
+            transition: border-color 0.1s ease, box-shadow 0.1s ease;
+        }
+        
+        .field-wrapper:focus-within {
+            border-color: #1b96ff;
+            box-shadow: 0 0 3px #1b96ff;
+        }
+        
+        /* Grid layout for expiry and CVN */
+        .field-row {
+            display: flex;
+            gap: 16px;
+        }
+        
+        .field-row .field-container {
+            flex: 1;
+        }
+        
+        /* Status and error messages */
+        .status-message {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 0.8125rem;
+            margin-top: 12px;
+        }
+        
+        .status-loading {
+            background-color: #f3f2f2;
+            color: #706e6b;
+        }
+        
+        .status-ready {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .status-error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        /* Hide status when not needed */
+        .hidden {
+            display: none;
+        }
+    </style>
+
+    <!-- Card Number Field -->
+    <div class="field-container">
+        <label class="field-label">Card Number <span class="required">*</span></label>
+        <div class="field-wrapper">
+            <div id="secure-card-container"></div>
+        </div>
+    </div>
+
+    <!-- Expiry and CVN in a row -->
+    <div class="field-row">
+        <div class="field-container">
+            <label class="field-label">Expiry Date <span class="required">*</span></label>
+            <div class="field-wrapper">
+                <div id="secure-expiry-container"></div>
+            </div>
+        </div>
+        <div class="field-container">
+            <label class="field-label">CVN <span class="required">*</span></label>
+            <div class="field-wrapper">
+                <div id="secure-cvn-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Display -->
+    <div id="status-display" class="status-message status-loading">
+        Initializing secure fields...
+    </div>
+
+    <script>
+        // State management
+        var publicApiKey = null;
+        var fieldsInitialized = false;
+        var accountId = '{!JSENCODE($CurrentPage.parameters.accountId)}';
+        
+        // Track the secureFieldCode from callbacks - this is the token!
+        var latestSecureFieldCode = null;
+        
+        // Track validation state for each field
+        var fieldStates = {
+            card: { valid: false, saved: false },
+            expiry: { valid: false, saved: false },
+            cvn: { valid: false, saved: false }
+        };
+        
+        // Notify parent that VF page has loaded
+        window.onload = function() {
+            console.log('VF Page loaded, waiting for INIT_EWAY message');
+            parent.postMessage({ action: 'VF_LOADED' }, '*');
+        };
+
+        // Callback function called by eWAY when field values change
+        // This is the key - the secureFieldCode is returned in the callback!
+        function secureFieldCallback(event) {
+            console.log('Secure field callback received:', event);
+            
+            // Update field state
+            if (event.targetField && fieldStates[event.targetField]) {
+                fieldStates[event.targetField].valid = event.valueIsValid || false;
+                fieldStates[event.targetField].saved = event.valueIsSaved || false;
+            }
+            
+            // Store the secureFieldCode - this is what we submit for payment
+            if (event.secureFieldCode) {
+                latestSecureFieldCode = event.secureFieldCode;
+                // Avoid logging sensitive token in production. Only show redacted indicator.
+                console.log('Got secureFieldCode: <REDACTED>');
+            }
+            
+            // Log any errors
+            if (event.errors && event.errors.length > 0) {
+                console.warn('Field validation errors:', event.errors);
+            }
+            
+            // Check if all fields are valid and saved
+            var allValid = fieldStates.card.valid && fieldStates.expiry.valid && fieldStates.cvn.valid;
+            var allSaved = fieldStates.card.saved && fieldStates.expiry.saved && fieldStates.cvn.saved;
+            
+            console.log('Field states - Valid:', allValid, 'Saved:', allSaved, 'States:', fieldStates);
+        }
+
+        // Initialize eWAY Secure Fields with the provided API key
+        function initializeSecureFields(apiKey) {
+            if (fieldsInitialized) {
+                console.log('Fields already initialized');
+                return;
+            }
+            
+            publicApiKey = apiKey;
+            console.log('Initializing eWAY Secure Fields with callback');
+            updateStatus('loading', 'Setting up secure fields...');
+            
+            try {
+                // Card Number Field Configuration
+                var cardConfig = {
+                    publicApiKey: publicApiKey,
+                    fieldDivId: 'secure-card-container',
+                    fieldType: 'card',
+                    styles: 'width: 100%; height: 32px; border: none; font-size: 14px; font-family: inherit;'
+                };
+                
+                // Expiry Date Field Configuration
+                var expiryConfig = {
+                    publicApiKey: publicApiKey,
+                    fieldDivId: 'secure-expiry-container',
+                    fieldType: 'expiry',
+                    styles: 'width: 100%; height: 32px; border: none; font-size: 14px; font-family: inherit;'
+                };
+                
+                // CVN Field Configuration
+                var cvnConfig = {
+                    publicApiKey: publicApiKey,
+                    fieldDivId: 'secure-cvn-container',
+                    fieldType: 'cvn',
+                    styles: 'width: 100%; height: 32px; border: none; font-size: 14px; font-family: inherit;'
+                };
+                
+                // Setup all secure fields WITH the callback function
+                // The callback receives the secureFieldCode when field values are saved
+                eWAY.setupSecureField(cardConfig, secureFieldCallback);
+                eWAY.setupSecureField(expiryConfig, secureFieldCallback);
+                eWAY.setupSecureField(cvnConfig, secureFieldCallback);
+                
+                fieldsInitialized = true;
+                
+                // Give fields a moment to render, then notify parent
+                setTimeout(function() {
+                    updateStatus('ready', 'Secure fields ready');
+                    parent.postMessage({ action: 'FIELDS_READY' }, '*');
+                }, 1000);
+                
+            } catch (error) {
+                console.error('Failed to initialize Secure Fields:', error);
+                updateStatus('error', 'Failed to initialize: ' + error.message);
+                parent.postMessage({ 
+                    action: 'INIT_ERROR', 
+                    error: error.message || 'Failed to initialize secure fields'
+                }, '*');
+            }
+        }
+        
+        // Update status display
+        function updateStatus(type, message) {
+            var statusEl = document.getElementById('status-display');
+            if (!statusEl) return;
+            
+            statusEl.textContent = message;
+            statusEl.className = 'status-message';
+            
+            switch(type) {
+                case 'loading':
+                    statusEl.classList.add('status-loading');
+                    break;
+                case 'ready':
+                    statusEl.classList.add('status-ready');
+                    // Hide after a moment
+                    setTimeout(function() {
+                        statusEl.classList.add('hidden');
+                    }, 2000);
+                    break;
+                case 'error':
+                    statusEl.classList.add('status-error');
+                    break;
+            }
+        }
+        
+        // Process tokenization request
+        function tokenizeCard() {
+            console.log('Processing tokenization request');
+            updateStatus('loading', 'Validating card details...');
+            
+            // Check if all fields are valid
+            var allValid = fieldStates.card.valid && fieldStates.expiry.valid && fieldStates.cvn.valid;
+            
+            if (!allValid) {
+                var missingFields = [];
+                if (!fieldStates.card.valid) missingFields.push('card number');
+                if (!fieldStates.expiry.valid) missingFields.push('expiry date');
+                if (!fieldStates.cvn.valid) missingFields.push('CVN');
+                
+                var errorMsg = 'Please complete: ' + missingFields.join(', ');
+                updateStatus('error', errorMsg);
+                parent.postMessage({ 
+                    action: 'TOKENIZE_ERROR', 
+                    error: errorMsg 
+                }, '*');
+                return;
+            }
+            
+            // Use saveAllFields to ensure all field data is saved to eWAY before proceeding
+            // This is especially important for Secure Fields to get the final secureFieldCode
+            try {
+                if (typeof eWAY.saveAllFields === 'function') {
+                    console.log('Calling eWAY.saveAllFields()');
+                    eWAY.saveAllFields(function() {
+                        console.log('saveAllFields complete, secureFieldCode: <REDACTED>');
+                        sendTokenToParent();
+                    }, 3000); // 3 second timeout
+                } else {
+                    // If saveAllFields is not available, use the stored code directly
+                    console.log('saveAllFields not available, using stored secureFieldCode');
+                    sendTokenToParent();
+                }
+            } catch (error) {
+                console.error('Tokenization error:', error);
+                // Even if saveAllFields fails, try using the stored code
+                sendTokenToParent();
+            }
+        }
+        
+        // Send the token to the parent LWC
+        function sendTokenToParent() {
+            if (latestSecureFieldCode) {
+                console.log('Sending secureFieldCode to parent: <REDACTED>');
+                updateStatus('ready', 'Card validated successfully');
+                parent.postMessage({ 
+                    action: 'TOKEN_GENERATED', 
+                    token: latestSecureFieldCode 
+                }, '*');
+            } else {
+                var errorMsg = 'No secure token available. Please enter all card details and try again.';
+                console.error(errorMsg);
+                updateStatus('error', errorMsg);
+                parent.postMessage({ 
+                    action: 'TOKENIZE_ERROR', 
+                    error: errorMsg 
+                }, '*');
+            }
+        }
+
+        // Listen for messages from Parent LWC
+        window.addEventListener('message', function(event) {
+            // SECURITY: Validate origin in production!
+            // Uncomment and configure for production:
+            // if (!event.origin.includes('.force.com') && !event.origin.includes('.salesforce.com')) {
+            //     console.warn('Rejected message from unauthorized origin:', event.origin);
+            //     return;
+            // }
+            
+            var data = event.data;
+            if (!data || !data.action) return;
+            
+            console.log('VF Page received message:', data.action);
+
+            switch(data.action) {
+                case 'INIT_EWAY':
+                    if (data.publicApiKey) {
+                        initializeSecureFields(data.publicApiKey);
+                    } else {
+                        parent.postMessage({ 
+                            action: 'INIT_ERROR', 
+                            error: 'No API key provided' 
+                        }, '*');
+                    }
+                    break;
+                    
+                case 'TOKENIZE':
+                case 'PAY':
+                    if (!fieldsInitialized) {
+                        parent.postMessage({ 
+                            action: 'TOKENIZE_ERROR', 
+                            error: 'Secure fields not initialized' 
+                        }, '*');
+                        return;
+                    }
+                    tokenizeCard();
+                    break;
+            }
+        });
+    </script>
+</apex:page>
