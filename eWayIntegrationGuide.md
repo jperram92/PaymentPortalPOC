@@ -125,6 +125,130 @@ Objective: Implement a SAQ A compatible eWAY payment integration for Salesforce 
 
 ---
 
+### Sequence Diagram (Mermaid)
+
+The sequence diagram below is a mid-level focused diagram showing key message and event flows between the user, LWC, Visualforce iframe, eWAY secure host and Apex server. It includes both success and error/decline branches.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant User
+  participant LWC as LWC (paymentForm)
+  participant VF as Visualforce (eWaySecureFields)
+  participant eWAYhost as eWAY Secure
+  participant Apex as Apex (eWayPaymentController)
+  participant eWAYapi as eWAY Rapid API
+
+  User->>LWC: Enter amount & name, open payment form
+  LWC->>VF: INIT_EWAY (publicApiKey)
+  VF->>eWAYhost: load secure fields & init
+  eWAYhost-->>VF: fields ready
+  VF-->>LWC: FIELDS_READY
+  User->>VF: Enter card details in secure iframe
+  LWC->>VF: TOKENIZE
+  VF->>eWAYhost: saveAllFields / request secureFieldCode
+  alt token success
+    eWAYhost-->>VF: secureFieldCode
+    VF-->>LWC: TOKEN_GENERATED (token - redacted)
+    LWC->>Apex: processPayment(token, amountInCents, name, email)
+    Apex->>eWAYapi: POST /Transaction (via Named Credential)
+    alt Transaction approved
+      eWAYapi-->>Apex: TransactionStatus true, A2000
+      Apex-->>LWC: success payload (no token)
+      LWC-->>User: Display success (transactionId)
+    else Transaction declined or validation
+      eWAYapi-->>Apex: response with Errors/ResponseCode
+      Apex-->>LWC: failure payload (friendly msg, rawResponse)
+      LWC-->>User: show friendly error (retry or change card)
+    end
+  else token error
+    VF-->>LWC: TOKENIZE_ERROR (validation details)
+    LWC-->>User: Show validation message (check card details)
+  end
+```
+
+### Error/Edge Case Sequences (Mermaid)
+
+The diagram below shows common edge cases in detail (Token expired, Missing name validation, Authorization failure):
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant User
+  participant LWC
+  participant VF
+  participant eWAYhost
+  participant Apex
+  participant eWAYapi
+
+  alt Token expired (V6148)
+    LWC->>VF: TOKENIZE
+    VF->>eWAYhost: saveAllFields
+    eWAYhost-->>VF: error (V6148)
+    VF-->>LWC: TOKENIZE_ERROR (V6148)
+    LWC-->>User: Token expired - re-enter cards
+  end
+
+  alt Missing cardholder name (V6021)
+    LWC->>Apex: processPayment(token, amountInCents, '', email)
+    Apex->>eWAYapi: POST /Transaction
+    eWAYapi-->>Apex: Errors: 'V6021'
+    Apex-->>LWC: responseMessage 'Cardholder name is required' (friendly)
+    LWC-->>User: Request user to add full name
+  end
+
+  alt Authorization failure (401)
+    Apex->>eWAYapi: POST /Transaction
+    eWAYapi-->>Apex: HTTP 401
+    Apex-->>LWC: responseMessage 'API Authorization failed'
+    LWC-->>User: Show generic error, admin needs to check credentials
+  end
+```
+
+---
+
+### Answered: User Questions (Diagram Scope)
+
+1. Level of detail the sequence diagram should focus on:
+   - Recommendation: **Mid-level abstraction**. Show the full message and event chain from UI to eWAY API with enough technical detail for developers to implement and debug (e.g., `INIT_EWAY`, `TOKENIZE`, `TOKEN_GENERATED`, `saveAllFields`, `processPayment`), without low-level DOM/UI events or internal JS library internals. This strikes a good balance: it's precise enough to show data flow and error handling while remaining readable. For architecture reviews, add a separate high-level diagram; for deep debugging, create a step-by-step trace.
+
+2. Error scenarios or edge cases to explicitly represent in the diagram:
+   - Token expired (`V6148`) — user re-entry & retry flow.
+   - Missing Cardholder Name (`V6021`) — map to `Customer.CardDetails.Name` and validation.
+   - Authorization/API auth failure (401) — Named Credential misconfiguration.
+   - Bank decline (`D4405` or others) — show decline branch and friendly messaging.
+   - Validation errors (V6011, V6012, V6100, etc.) and encryption errors (V6126, V6127).
+   - Network timeout or connection error — show retry or fallback behavior.
+
+3. Which interactions or system events should be included:
+   - User inputs: amount, name, email and opening the modal to start tokenization.
+   - `INIT_EWAY` message from LWC to VF (publicApiKey).
+   - `FIELDS_READY` from VF to LWC.
+   - User typing in secure field iframes (VF hosts) and `TOKENIZE` from LWC.
+   - `saveAllFields` request from VF to eWAY Secure Host.
+   - `TOKEN_GENERATED` from VF to LWC with `secureFieldCode` token.
+   - LWC calling Apex `processPayment` with token and customer details.
+   - Apex -> eWAY Rapid API callout (via Named Credential) and response.
+   - LWC showing success/failure and debug output.
+
+4. Should the diagram illustrate security/compliance aspects?
+   - Yes. The diagram should **clearly** highlight security and compliance elements like:
+   - `SecuredCardData` is a single-use token and not raw card numbers.
+   - Tokens are **redacted** and should not be logged.
+   - Show that Apex calls the eWAY Rapid API via Named Credentials (no direct API Key in code).
+   - Add a note about `CSP` Trusted Sites allowing eWAY script/iframe resources and that `origin` checks should be enabled in production for `postMessage`.
+   - Highlight that the Secure Fields host is eWAY (not Salesforce) to preserve SAQ A compliance.
+
+---
+
+If you want, I can now:
+ - Add an architecture-level (high-level) diagram to the guide.
+ - Export the Mermaid diagrams to PNG/SVG and commit them to the repo (I can provide steps to generate locally using mermaid CLI or online).
+ - Add a short diagnostics flow (example logs to copy/paste) for each error scenario.
+
+Which additional outputs would you prefer? (e.g., image export, expanded debug flows for each error type, or a second Mermaid diagram showing high-level components)
+
+
 ## 6) Security & Compliance
 
 - SAQ A compliant: card entry is via eWAY iframes; tokens are used to avoid collecting raw card details.
